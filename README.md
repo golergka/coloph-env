@@ -31,7 +31,7 @@ class ServerEnv(Env):
 from coloph_env import load
 from config import ServerEnv
 
-env = load(ServerEnv, files=[".env", ".env.local"])
+env = load(ServerEnv, toml_files=["config.toml", "config.local.toml"], files=[".env", ".env.local"])
 # Start application work only after load() succeeds.
 connect(env.database_url)
 serve(port=env.port)
@@ -52,6 +52,7 @@ env = load(ServerEnv)
 - Every field is required. There are no field defaults.
 - Empty and whitespace-only values count as missing. Other values lose surrounding whitespace.
 - Later files override earlier files. Process values override files, including empty process values.
+- Source precedence is earlier TOML, later TOML, dotenv, process environment, then explicit overrides.
 - Every specified file must exist. The package does not search parent directories.
 - Dotenv values remain literal. Variable interpolation and shell commands do not run.
 - Loading does not change `os.environ`. Configuration attributes are read-only.
@@ -61,6 +62,50 @@ Custom parsers accept a string and raise `ValueError` for invalid input.
 Other exceptions propagate as programming errors.
 `ValidationError.problems` contains field names, environment names, and reasons.
 Validation diagnostics omit values and parser exception text. Configuration `repr()` also omits values.
+
+TOML uses field names by default. Scalars become strings and arrays become compact JSON before parsing.
+Use `toml=` when a key differs:
+
+```python
+import json
+
+from coloph_env import Env, Var, load
+
+
+class FileEnv(Env):
+    workers = Var("WORKERS", parse=int)
+    debug = Var("DEBUG", toml="development", parse=lambda value: value == "true")
+    hosts = Var("HOSTS", parse=json.loads)
+
+
+env = load(
+    FileEnv,
+    toml_files=["base.toml", "local.toml"],
+    files=[".env"],
+    overrides={"DEBUG": "false"},
+)
+```
+
+Applications can attach selected configuration flags to a standalone parser, a parent parser created with
+`add_help=False`, or an application-owned subparser. Omitted flags do not override other sources:
+
+```python
+import argparse
+
+from coloph_env import add_arguments, load_arguments
+from config import ServerEnv
+
+
+parser = argparse.ArgumentParser()
+add_arguments(
+    parser,
+    ServerEnv,
+    flags={"database_url": "--database-url", "port": ("--port", "-p")},
+    help={"port": "Server port"},
+)
+args = parser.parse_args()
+env = load_arguments(parser, ServerEnv, args, files=[".env"])
+```
 
 Alternate names require exactly one non-empty value:
 

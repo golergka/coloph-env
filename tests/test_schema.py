@@ -1,3 +1,4 @@
+import json
 import traceback
 
 import pytest
@@ -150,3 +151,61 @@ def test_dotenv_quoting_export_comments_and_multiline(tmp_path):
     path = tmp_path / "config.env"
     path.write_text('export KEY="first\nsecond" # comment\nPORT=7\n')
     assert load(Server, files=[path], environ={}).key == "first\nsecond"
+
+
+def test_toml_types_order_and_all_later_layers(tmp_path):
+    class Typed(Env):
+        text = Var("TEXT")
+        count = Var("COUNT", parse=int)
+        ratio = Var("RATIO", parse=float)
+        enabled = Var("ENABLED", parse=lambda value: value == "true")
+        names = Var("NAMES", toml="servers", parse=json.loads)
+
+    first = tmp_path / "base.toml"
+    second = tmp_path / "local.toml"
+    dotenv = tmp_path / ".env"
+    first.write_text('text = "base"\ncount = 1\nratio = 1.5\nenabled = true\nservers = ["a", "b"]\n')
+    second.write_text('text = "local"\n')
+    dotenv.write_text("COUNT=2\n")
+    env = load(
+        Typed,
+        toml_files=[first, second],
+        files=[dotenv],
+        environ={"RATIO": "2.5"},
+        overrides={"TEXT": "cli"},
+    )
+    assert (env.text, env.count, env.ratio, env.enabled, env.names) == ("cli", 2, 2.5, True, ["a", "b"])
+
+
+def test_toml_unknown_keys_types_missing_files_and_final_fields(tmp_path):
+    unknown = tmp_path / "unknown.toml"
+    unknown.write_text('secret_key = "secret"\n')
+    with pytest.raises(ValidationError) as caught:
+        load(Server, toml_files=[unknown], environ={})
+    assert caught.value.problems[0].source == str(unknown)
+    assert "secret_key" in str(caught.value)
+    assert '"secret"' not in str(caught.value)
+
+    unsupported = tmp_path / "unsupported.toml"
+    unsupported.write_text("key = { nested = 'secret' }\nport = 1\n")
+    with pytest.raises(ValidationError) as caught:
+        load(Server, toml_files=[unsupported], environ={})
+    assert "secret" not in str(caught.value)
+
+    partial = tmp_path / "partial.toml"
+    partial.write_text('key = "value"\n')
+    with pytest.raises(ValidationError) as caught:
+        load(Server, toml_files=[partial], environ={})
+    assert [problem.field for problem in caught.value.problems] == ["port"]
+    with pytest.raises(FileNotFoundError):
+        load(Server, toml_files=[tmp_path / "missing.toml"], environ={})
+
+
+def test_invalid_toml_parser_value_identifies_source_without_value(tmp_path):
+    path = tmp_path / "invalid.toml"
+    path.write_text('key = "safe"\nport = "port-secret"\n')
+    with pytest.raises(ValidationError) as caught:
+        load(Server, toml_files=[path], environ={})
+    assert caught.value.problems[0].source == str(path)
+    assert str(path) in str(caught.value)
+    assert "port-secret" not in str(caught.value)

@@ -1,9 +1,11 @@
+import argparse
 import os
 import subprocess
 import sys
 
 import pytest
 
+from coloph_env import Env, ValidationError, Var, add_arguments, load, load_arguments, overrides
 from coloph_env.lint import inspect_source, lint
 
 
@@ -81,3 +83,81 @@ def test_cli_help_needs_no_configuration(tmp_path):
     )
     assert result.returncode == 0
     assert "validate" in result.stdout
+
+
+def test_cli_validates_toml_file(tmp_path):
+    (tmp_path / "schema.py").write_text(
+        'from coloph_env import Env, Var\nclass App(Env):\n    port = Var("PORT", parse=int)\n'
+    )
+    path = tmp_path / "values.toml"
+    path.write_text("port = 8080\n")
+    result = subprocess.run(
+        [sys.executable, "-m", "coloph_env", "validate", "schema:App", "--toml-file", str(path)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+class CliEnv(Env):
+    key = Var("KEY", "OLD_KEY")
+    port = Var("PORT", parse=int)
+
+
+def test_generated_arguments_override_environment_and_omit_absent_values():
+    parser = argparse.ArgumentParser()
+    add_arguments(parser, CliEnv, flags={"key": ("--key", "-k"), "port": "--port"}, help={"port": "Port"})
+    namespace = parser.parse_args(["--key", "cli"])
+    env = load(CliEnv, environ={"OLD_KEY": "environment", "PORT": "7"}, overrides=overrides(CliEnv, namespace))
+    assert (env.key, env.port) == ("cli", 7)
+    assert "Port" in parser.format_help()
+
+
+def test_generated_arguments_support_parent_parser_and_app_subparser():
+    parent = argparse.ArgumentParser(add_help=False)
+    add_arguments(parent, CliEnv, flags={"key": "--key"})
+    parser = argparse.ArgumentParser(parents=[parent])
+    commands = parser.add_subparsers(dest="command", required=True)
+    run = commands.add_parser("run")
+    add_arguments(run, CliEnv, flags={"port": "--listen-port"})
+    namespace = parser.parse_args(["--key", "value", "run", "--listen-port", "8"])
+    env = load(CliEnv, environ={}, overrides=overrides(CliEnv, namespace))
+    assert (env.key, env.port) == ("value", 8)
+
+
+def test_generated_arguments_empty_invalid_aliases_and_conflicts_are_safe():
+    parser = argparse.ArgumentParser()
+    add_arguments(parser, CliEnv, flags={"key": "--key", "port": "--port"})
+    with pytest.raises(ValidationError) as caught:
+        load(
+            CliEnv,
+            environ={"KEY": "environment", "PORT": "7"},
+            overrides=overrides(CliEnv, parser.parse_args(["--key", ""])),
+        )
+    assert "required value" in str(caught.value)
+
+    with pytest.raises(ValidationError) as caught:
+        load(
+            CliEnv,
+            environ={"KEY": "secret", "PORT": "7"},
+            overrides=overrides(CliEnv, parser.parse_args(["--port", "port-secret"])),
+        )
+    assert "port-secret" not in str(caught.value)
+
+    parser.add_argument("--taken")
+    with pytest.raises(argparse.ArgumentError):
+        add_arguments(parser, CliEnv, flags={"key": "--taken"})
+
+
+def test_invalid_generated_argument_is_a_redacted_argparse_error(capsys):
+    parser = argparse.ArgumentParser(prog="app")
+    add_arguments(parser, CliEnv, flags={"port": "--port"})
+    namespace = parser.parse_args(["--port", "port-secret"])
+    with pytest.raises(SystemExit) as caught:
+        load_arguments(parser, CliEnv, namespace, environ={"KEY": "key"})
+    assert caught.value.code == 2
+    error = capsys.readouterr().err
+    assert "value is invalid" in error
+    assert "port-secret" not in error

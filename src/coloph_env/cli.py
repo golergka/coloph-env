@@ -18,7 +18,8 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate", help="Validate explicit dotenv files without process values")
     validate.add_argument("schema", help="Importable module:EnvSubclass")
-    validate.add_argument("--file", action="append", required=True, type=Path)
+    validate.add_argument("--file", action="append", default=[], type=Path)
+    validate.add_argument("--toml-file", action="append", default=[], type=Path)
     validate.add_argument(
         "--module-path", type=Path, default=Path.cwd(), help="Schema import directory (default: current directory)"
     )
@@ -37,7 +38,9 @@ def main(argv: list[str] | None = None) -> int:
                 schema = getattr(importlib.import_module(module), attribute, None)
                 if not isinstance(schema, type) or not issubclass(schema, Env):
                     parser.error("The schema must name an Env subclass")
-                load(schema, files=args.file, environ={})
+                if not args.file and not args.toml_file:
+                    parser.error("Supply at least one --file or --toml-file")
+                load(schema, toml_files=args.toml_file, files=args.file, environ={})
             finally:
                 sys.path.pop(0)
             print("Configuration is valid")
