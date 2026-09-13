@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from coloph_env import Env, ValidationError, Var, add_arguments, load, load_arguments, overrides
+from coloph_env import Env, ValidationError, Var, add_arguments, cli, load, load_arguments, overrides
 from coloph_env.lint import inspect_source, lint
 
 
@@ -20,10 +20,11 @@ from coloph_env.lint import inspect_source, lint
     ],
 )
 def test_raw_environment_aliases(source):
-    findings = inspect_source(source, path="app.py", entrypoint=False, configuration=False)
+    findings = inspect_source(source, path="app.py", entrypoint=False)
     assert len(findings) == 1
     assert "ENV001" in findings[0].rule
-    assert not inspect_source(source, path="app.py", entrypoint=False, configuration=True)
+    assert "env-variables skill" in findings[0].rule
+    assert inspect_source(source, path="app.py", entrypoint=True)
 
 
 @pytest.mark.parametrize(
@@ -36,16 +37,15 @@ def test_raw_environment_aliases(source):
     ],
 )
 def test_loading_only_at_entrypoints(source):
-    findings = inspect_source(source, path="app.py", entrypoint=False, configuration=True)
+    findings = inspect_source(source, path="app.py", entrypoint=False)
     assert len(findings) == 1
     assert "ENV002" in findings[0].rule
-    assert not inspect_source(source, path="app.py", entrypoint=True, configuration=False)
+    assert "env-variables skill" in findings[0].rule
+    assert not inspect_source(source, path="app.py", entrypoint=True)
 
 
 def test_comments_and_literals_are_not_code():
-    assert not inspect_source(
-        '# os.getenv("KEY")\nx = "load_dotenv()"', path="app.py", entrypoint=False, configuration=False
-    )
+    assert not inspect_source('# os.getenv("KEY")\nx = "load_dotenv()"', path="app.py", entrypoint=False)
 
 
 def test_repository_lint_config_and_exclusions(tmp_path):
@@ -73,6 +73,7 @@ def test_cli_validates_files_in_separate_process(tmp_path):
     )
     assert result.returncode == 1
     assert "required value" in result.stderr
+    assert "env-variables skill" in result.stderr
     assert "secret" not in result.stderr
     assert "Traceback" not in result.stderr
 
@@ -99,6 +100,68 @@ def test_cli_validates_toml_file(tmp_path):
         timeout=15,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_cli_returns_check_failure_for_invalid_or_missing_configuration(tmp_path):
+    (tmp_path / "schema.py").write_text('from coloph_env import Env, Var\nclass App(Env):\n    key = Var("KEY")\n')
+    missing = subprocess.run(
+        [sys.executable, "-m", "coloph_env", "validate", "schema:App", "--file", "missing.env"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert missing.returncode == 1
+
+    path = tmp_path / "values.env"
+    path.write_text("")
+    invalid = subprocess.run(
+        [sys.executable, "-m", "coloph_env", "validate", "schema:App", "--file", str(path)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert invalid.returncode == 1
+
+
+def test_cli_returns_software_error_for_unexpected_internal_failure(tmp_path, monkeypatch, capsys):
+    def fail(root, config):
+        raise RuntimeError("internal-secret")
+
+    monkeypatch.setattr(cli, "lint", fail)
+    assert cli.main(["lint", str(tmp_path)]) == 70
+    error = capsys.readouterr().err
+    assert "internal coloph-env error" in error
+    assert "env-variables skill" in error
+    assert "internal-secret" not in error
+
+
+def test_cli_redacts_unexpected_schema_import_errors(tmp_path):
+    (tmp_path / "schema.py").write_text('raise ValueError("import-secret")\n')
+    path = tmp_path / "values.env"
+    path.write_text("KEY=value\n")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "coloph_env",
+            "validate",
+            "schema:App",
+            "--module-path",
+            str(tmp_path),
+            "--file",
+            str(path),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert result.returncode == 70
+    assert "internal coloph-env error" in result.stderr
+    assert "env-variables skill" in result.stderr
+    assert "import-secret" not in result.stderr
 
 
 class CliEnv(Env):

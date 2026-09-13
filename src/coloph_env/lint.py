@@ -19,7 +19,7 @@ class Finding:
         return f"{self.path}:{self.line}: {self.rule}"
 
 
-def inspect_source(source: str, *, path: str, entrypoint: bool, configuration: bool) -> list[Finding]:
+def inspect_source(source: str, *, path: str, entrypoint: bool) -> list[Finding]:
     """Detect direct imports and module aliases without executing source code."""
     tree = ast.parse(source, filename=path)
     aliases: dict[str, str] = {}
@@ -42,10 +42,13 @@ def inspect_source(source: str, *, path: str, entrypoint: bool, configuration: b
     for node in ast.walk(tree):
         resolved = name(node)
         if isinstance(node, (ast.Name, ast.Attribute)) and resolved in {"os.environ", "os.environb", "os.getenv"}:
-            if not (entrypoint or configuration):
-                findings.add(
-                    (node.lineno, "ENV001: raw environment access belongs in an entrypoint or configuration module")
+            findings.add(
+                (
+                    node.lineno,
+                    "ENV001: replace raw environment access with a coloph-env schema field; "
+                    "follow the env-variables skill",
                 )
+            )
         if isinstance(node, ast.Call) and name(node.func) in {
             "coloph_env.load",
             "coloph_env.schema.load",
@@ -55,7 +58,12 @@ def inspect_source(source: str, *, path: str, entrypoint: bool, configuration: b
             "dotenv.main.dotenv_values",
         }:
             if not entrypoint:
-                findings.add((node.lineno, "ENV002: environment loading belongs in an entrypoint"))
+                findings.add(
+                    (
+                        node.lineno,
+                        "ENV002: environment loading belongs in an entrypoint; follow the env-variables skill",
+                    )
+                )
     return [Finding(path, line, rule) for line, rule in sorted(findings)]
 
 
@@ -65,8 +73,8 @@ def lint(root: Path, config_path: Path | None = None) -> list[Finding]:
     path = config_path or root / "pyproject.toml"
     with path.open("rb") as stream:
         config = tomllib.load(stream).get("tool", {}).get("coloph-env", {})
-    if not isinstance(config, dict) or set(config) - {"entrypoints", "configuration", "exclude"}:
-        raise ValueError("Use entrypoints, configuration, and exclude in [tool.coloph-env]")
+    if not isinstance(config, dict) or set(config) - {"entrypoints", "exclude"}:
+        raise ValueError("Use entrypoints and exclude in [tool.coloph-env]")
     for patterns in config.values():
         if not isinstance(patterns, list) or not all(isinstance(pattern, str) for pattern in patterns):
             raise ValueError("Each lint configuration value must be an array of path patterns")
@@ -98,7 +106,6 @@ def lint(root: Path, config_path: Path | None = None) -> list[Finding]:
                     file.read_text(encoding="utf-8"),
                     path=relative,
                     entrypoint=matches(relative, "entrypoints"),
-                    configuration=matches(relative, "configuration"),
                 )
             )
     return findings

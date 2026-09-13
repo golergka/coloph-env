@@ -29,18 +29,22 @@ def main() -> None:
         subprocess.run(["uv", "build", "--no-sources"], cwd=ROOT, check=True)
         with tempfile.TemporaryDirectory(prefix="coloph-env-smoke-") as directory:
             for artifact in artifacts(version):
+                artifact_directory = Path(directory) / artifact.name
+                artifact_directory.mkdir()
                 subprocess.run(
                     [
                         "uv",
                         "run",
                         "--isolated",
                         "--no-project",
+                        "--refresh-package",
+                        "coloph-env",
                         "--with",
                         str(artifact),
                         "python",
                         str(ROOT / "scripts/smoke.py"),
                     ],
-                    cwd=directory,
+                    cwd=artifact_directory,
                     check=True,
                 )
     else:

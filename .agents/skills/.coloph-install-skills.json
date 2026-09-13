@@ -1,0 +1,10 @@
+{
+  "env-variables": {
+    "digest": "a16861020ab75a9f275d48a28d314e49bfbf61be8361b1c4cf4c95e8b09774da",
+    "provider": "coloph-env"
+  },
+  "install-bundled-skills": {
+    "digest": "c7cba858ba805786f2c37a671a409ad5f685c75a5ac67094e85d66949a312386",
+    "provider": "coloph-install-skills"
+  }
+}
