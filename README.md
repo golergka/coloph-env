@@ -1,5 +1,7 @@
 # coloph-env
 
+*Part of Coloph Works: agent-native building blocks for better software.*
+
 **Agent-native environment variables in Python.**
 
 - **Agent-native:** The bundled skill teaches coding agents how to use the package correctly.
