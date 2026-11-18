@@ -14,6 +14,8 @@
 
 Unlike Pydantic Settings, Dynaconf, and environs, coloph-env favors strict conventions and agent-friendly tooling over flexibility.
 
+See [Coloph Works](https://github.com/golergka/coloph-works) for the full package collection.
+
 ## Install
 
 ```sh
